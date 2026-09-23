@@ -2,6 +2,7 @@ from pathlib import Path
 from ultralytics import YOLO
 import cv2
 
+
 project_root = Path(__file__).resolve().parents[1]
 model_path = project_root / "models" / "yolo26s.pt"
 test_image_path = project_root / "outputs" / "frames" / "first_frame.png"
