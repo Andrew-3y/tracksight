@@ -9,6 +9,23 @@ def detect_vehicles(model, source_image, roi_left, roi_top, roi_right, roi_botto
     annotated_image = first_result.plot()
     return first_result, annotated_image
 
+def convert_boxes_to_full_frame(boxes, roi_left, roi_top):
+    full_frame_detections = []
+    for x1, y1, x2, y2, confidence, class_id in boxes.data.cpu().tolist():
+        full_frame_detections.append(
+            {
+                "xyxy": (
+                    x1 + roi_left,
+                    y1 + roi_top,
+                    x2 + roi_left,
+                    y2 + roi_top,
+                ),
+                "confidence": confidence,
+                "class_id": int(class_id),
+            }
+        )
+    return full_frame_detections
+
 if __name__ == "__main__":
     project_root = Path(__file__).resolve().parents[1]
     model_path = project_root / "models" / "yolo26m.pt"
