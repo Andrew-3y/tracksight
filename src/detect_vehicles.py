@@ -4,7 +4,7 @@ import cv2
 
 def detect_vehicles(model, source_image, roi_left, roi_top, roi_right, roi_bottom):
     track_region = source_image[roi_top:roi_bottom, roi_left:roi_right]
-    results = model(track_region, classes=[2])
+    results = model(track_region, classes=[2], imgsz=1280)
     first_result = results[0]
     annotated_image = first_result.plot()
     return first_result, annotated_image
