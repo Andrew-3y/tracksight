@@ -2,6 +2,7 @@ from src.tracking import Tracker
 
 tracker = Tracker()
 max_distance = 50
+max_missing_frames = 1
 
 frame_one_detections = [
     {
@@ -47,9 +48,9 @@ frame_three_detections = [
     },
 ]
 
-tracked_frame_one = tracker.update(frame_one_detections, max_distance)
-tracked_frame_two = tracker.update(frame_two_detections, max_distance)
-tracked_frame_three = tracker.update(frame_three_detections, max_distance)
+tracked_frame_one = tracker.update(frame_one_detections,max_distance, max_missing_frames)
+tracked_frame_two = tracker.update(frame_two_detections, max_distance,max_missing_frames)
+tracked_frame_three = tracker.update(frame_three_detections, max_distance, max_missing_frames)
 
 print("Frame 1 track IDs:", [detection["track_id"] for detection in tracked_frame_one])
 print("Frame 2 track IDs:", [detection["track_id"] for detection in tracked_frame_two])
