@@ -1,7 +1,7 @@
 from pathlib import Path
 from ultralytics import YOLO
 import cv2
-from src.detect_vehicles import convert_boxes_to_full_frame, detect_vehicles, remove_duplicate_detections
+from src.detect_vehicles import convert_boxes_to_full_frame, detect_vehicles, remove_duplicate_detections, remove_shared_crop_edge_detections
 
 project_root = Path(__file__).resolve().parents[1]
 video_path = project_root / "data" / "raw" / "racecars_pexels_3774642_1920x1080_25fps.mp4"  
@@ -11,6 +11,9 @@ track_regions = {
     "centre": (650, 400, 1300, 800),
     "right": (1150, 400, 1920, 850),
 }
+duplicate_iou_threshold = 0.3
+crop_edge_margin = 5
+overlap_fraction_threshold = 0.25
 video_capture = cv2.VideoCapture(str(video_path))
 if not video_capture.isOpened():
     raise FileNotFoundError(f"Could not open video: {video_path}")
@@ -35,20 +38,12 @@ for label, time_seconds in validation_times_seconds.items():
     if not frame_read_success:
         raise RuntimeError(f"Could not read the {label} validation frame.")
     frame_detections = []
-    for region_name, (roi_left, roi_top, roi_right, roi_bottom) in track_regions.items():
-        first_result, annotated_image = detect_vehicles(
-            model,
-            validation_frame,
-            roi_left,
-            roi_top,
-            roi_right,
-            roi_bottom,
-        )
-        full_frame_detections = convert_boxes_to_full_frame(
-            first_result.boxes,
-            roi_left,
-            roi_top
-        )
+    for region_name, current_region in track_regions.items():
+        roi_left, roi_top, roi_right, roi_bottom = current_region
+        first_result, annotated_image = detect_vehicles(model, validation_frame, roi_left, roi_top, roi_right, roi_bottom)
+        full_frame_detections = convert_boxes_to_full_frame(first_result.boxes, roi_left, roi_top)
+        for detection in full_frame_detections:
+            detection["region_name"] = region_name
         frame_detections.extend(full_frame_detections)
         annotated_image_path = validation_output_dir / f"{label}_{region_name}_annotated.png"
         annotated_image_save = cv2.imwrite(str(annotated_image_path), annotated_image)
@@ -57,7 +52,8 @@ for label, time_seconds in validation_times_seconds.items():
         detection_count = len(first_result.boxes)
         print(f"{label}, {region_name}: frame {frame_index}, {detection_count} detections")
     print(f"{label}: {len(frame_detections)} raw full-frame detections")
-    unique_frame_detections = remove_duplicate_detections(frame_detections, iou_threshold=0.5)
+    edge_checked_frame_detections = remove_shared_crop_edge_detections(frame_detections, track_regions, crop_edge_margin, overlap_fraction_threshold)
+    unique_frame_detections = remove_duplicate_detections(edge_checked_frame_detections, iou_threshold=duplicate_iou_threshold)
     print(f"{label}: {len(unique_frame_detections)} unique full-frame detections")
     full_frame_annotated_image = validation_frame.copy()
     for detection in unique_frame_detections:

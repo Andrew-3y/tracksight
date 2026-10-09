@@ -11,14 +11,21 @@ track_regions = {
     "right": (1150, 400, 1920, 850),
 }
 output_video_path = project_root / "outputs" / "tracking" / "annotated_racecars.mp4"
-max_distance = 50
+max_distance = 75
 max_missing_frames = 1
-completed_video_path = process_video(
+duplicate_iou_threshold = 0.3
+crop_edge_margin = 5
+overlap_fraction_threshold = 0.25
+completed_video_path, trajectories = process_video(
     model=model,
     video_path=video_path,
     output_video_path=output_video_path,
     track_regions=track_regions,
     max_distance=max_distance,
     max_missing_frames=max_missing_frames,
+    duplicate_iou_threshold=duplicate_iou_threshold,
+    crop_edge_margin=crop_edge_margin,
+    overlap_fraction_threshold=overlap_fraction_threshold
 )
 print(f"Saved annotated video to: {completed_video_path}")
+print(f"Recorded {len(trajectories)} trajectory segments.")
