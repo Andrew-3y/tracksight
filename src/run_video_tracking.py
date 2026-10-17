@@ -149,6 +149,12 @@ def parse_arguments():
         default="sparseOptFlow",
         help="Camera-motion compensation: sparseOptFlow for moving cameras, none for static cameras.",
     )
+    parser.add_argument(
+        "--max-marshal-briefing-highlights",
+        type=int,
+        default=5,
+        help="Maximum supported review cards saved for each Marshal briefing evidence type.",
+    )
     return parser.parse_args()
 
 
@@ -260,6 +266,7 @@ def run_video_tracking():
         risk_evidence_output_path,
         risk_review_clip_paths,
         run_summary_output_path,
+        marshal_briefing_output_path,
     ) = process_video(
         model=model,
         video_path=video_path,
@@ -289,11 +296,13 @@ def run_video_tracking():
         camera_motion_method=arguments.camera_motion_method,
         camera_mode=camera_mode,
         run_provenance=run_provenance,
+        max_marshal_briefing_highlights=arguments.max_marshal_briefing_highlights,
     )
     print(f"Saved annotated video to: {completed_video_path}")
     print(f"Saved trajectory data to: {trajectory_output_path}")
     print(f"Saved predicted-risk evidence to: {risk_evidence_output_path}")
     print(f"Saved run summary to: {run_summary_output_path}")
+    print(f"Saved Marshal briefing to: {marshal_briefing_output_path}")
     print(
         f"Saved {len(risk_review_clip_paths)} candidate-risk clips to: "
         f"{risk_evidence_output_path.parent}"

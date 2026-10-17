@@ -15,7 +15,8 @@ TrackSight Marshal takes race footage and produces a reviewable chain of evidenc
 1. **Annotated camera video** shows the vehicles that were detected and assigned a temporary on-screen ID.
 2. **Spatial digital twin** maps confirmed vehicle footpoints into a calibrated local track view, including a moving-camera stabilization step when needed.
 3. **Evidence queue** separates observed proximity from predicted close approaches and opens short supporting clips for a human reviewer.
-4. **Provenance** records the input video, model, calibration, and settings that produced the result.
+4. **Marshal briefing** turns the saved evidence into two separate, plain-language review lists with clips and a recommended human action.
+5. **Provenance** records the input video, model, calibration, and settings that produced the result.
 
 For the included TCR demonstration clip, process the video and then open the dashboard:
 
@@ -34,6 +35,7 @@ In the dashboard, choose `tracksight_marshal_tcr_clean_pack_final` under **Compl
 - A trajectory JSON file containing each confirmed vehicle's observed positions, confidence, calibrated track position, and motion status.
 - A review-evidence JSON file listing sustained close approaches between two tracked vehicles.
 - A predicted-risk JSON file listing pairs that are projected to reach a small separation during a short future horizon.
+- A Marshal-briefing JSON file that presents the strongest predicted and observed evidence separately for human review.
 - A run-summary JSON file that distinguishes all saved ID segments from the segments trusted for safety analysis.
 - Up to ten short annotated review clips around the closest, non-overlapping evidence moments.
 - Up to ten short annotated clips around the strongest candidate-risk moments.
@@ -82,6 +84,8 @@ For an input video named `your_race_video.mp4`, TrackSight writes to `outputs/tr
 - `annotated_your_race_video_review_clips/`
 - `annotated_your_race_video_risk_evidence.json`
 - `annotated_your_race_video_risk_review_clips/`
+- `annotated_your_race_video_marshal_briefing.json`
+- `annotated_your_race_video_marshal_briefing_clips/`
 - `annotated_your_race_video_run_summary.json`
 
 ## Review dashboard

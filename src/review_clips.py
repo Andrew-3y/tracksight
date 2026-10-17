@@ -55,14 +55,14 @@ def create_review_clips(
     priority_key="closest_normalized_distance",
     clip_prefix="review",
 ):
+    """Create compact, non-overlapping clips for the general evidence queue."""
     video_capture = cv2.VideoCapture(str(annotated_video_path))
     if not video_capture.isOpened():
         raise FileNotFoundError(
             f"Could not open annotated video for review clips: {annotated_video_path}"
         )
     fps = video_capture.get(cv2.CAP_PROP_FPS)
-    frame_width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    video_capture.release()
     selected_events = select_review_events(
         review_evidence,
         fps,
@@ -72,14 +72,45 @@ def create_review_clips(
         anchor_frame_key,
         priority_key,
     )
+    return create_event_clips(
+        annotated_video_path,
+        [event for event, _, _ in selected_events],
+        output_directory,
+        pre_event_seconds,
+        post_event_seconds,
+        anchor_frame_key=anchor_frame_key,
+        clip_prefix=clip_prefix,
+    )
+
+
+def create_event_clips(
+    annotated_video_path,
+    events,
+    output_directory,
+    pre_event_seconds,
+    post_event_seconds,
+    anchor_frame_key="closest_frame",
+    clip_prefix="review",
+    clip_path_key="review_clip_path",
+):
+    """Create a dedicated clip for every supplied event, even when they overlap."""
+    video_capture = cv2.VideoCapture(str(annotated_video_path))
+    if not video_capture.isOpened():
+        raise FileNotFoundError(
+            f"Could not open annotated video for review clips: {annotated_video_path}"
+        )
+    fps = video_capture.get(cv2.CAP_PROP_FPS)
+    frame_width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     output_directory = Path(output_directory)
     output_directory.mkdir(parents=True, exist_ok=True)
     review_clip_paths = []
-    for clip_number, (event, start_frame, end_frame) in enumerate(
-        selected_events,
-        start=1,
-    ):
+    pre_event_frames = round(pre_event_seconds * fps)
+    post_event_frames = round(post_event_seconds * fps)
+    for clip_number, event in enumerate(events, start=1):
         track_id_a, track_id_b = event["track_ids"]
+        start_frame = max(0, event[anchor_frame_key] - pre_event_frames)
+        end_frame = event[anchor_frame_key] + post_event_frames
         review_clip_path = output_directory / (
             f"{clip_prefix}_{clip_number:02d}_tracks_{track_id_a}_{track_id_b}_"
             f"frame_{event[anchor_frame_key]}.mp4"
@@ -97,7 +128,7 @@ def create_review_clips(
             video_writer.write(frame)
         video_writer.release()
         finalize_browser_video(working_clip_path, review_clip_path)
-        event["review_clip_path"] = str(review_clip_path)
+        event[clip_path_key] = str(review_clip_path)
         review_clip_paths.append(review_clip_path)
     video_capture.release()
     return review_clip_paths

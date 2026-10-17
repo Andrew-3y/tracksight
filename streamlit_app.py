@@ -107,6 +107,9 @@ def get_run_artifacts(trajectory_path):
         "risk_evidence_json": trajectory_path.with_name(
             f"{run_name}_risk_evidence.json"
         ),
+        "marshal_briefing_json": trajectory_path.with_name(
+            f"{run_name}_marshal_briefing.json"
+        ),
         "run_summary_json": trajectory_path.with_name(
             f"{run_name}_run_summary.json"
         ),
@@ -467,6 +470,78 @@ def render_evidence(
         )
 
 
+def render_marshal_briefing(artifacts, run_is_quality_assessed):
+    """Present saved evidence as a concise briefing without adding new claims."""
+    st.header("Marshal briefing", icon=":material/assignment:")
+    if not run_is_quality_assessed:
+        st.warning(
+            "This legacy run is not eligible for a Marshal briefing. Reprocess the video with the current pipeline.",
+            icon=":material/error:",
+        )
+        return
+    briefing_path = artifacts["marshal_briefing_json"]
+    if not briefing_path.is_file():
+        st.info(
+            "This completed run predates the Marshal briefing. Reprocess the video to create its saved briefing artifact.",
+            icon=":material/info:",
+        )
+        return
+
+    briefing = load_saved_json(briefing_path)
+    st.warning(briefing["disclaimer"], icon=":material/warning:")
+    summary = briefing["summary"]
+    with st.container(horizontal=True):
+        st.metric(
+            "Candidate-risk events",
+            summary["candidate_risk_event_count"],
+            border=True,
+        )
+        st.metric(
+            "Observed-proximity events",
+            summary["observed_proximity_event_count"],
+            border=True,
+        )
+        st.metric(
+            "Safety-eligible segments",
+            summary["trusted_track_segments"],
+            border=True,
+        )
+    st.caption(
+        "The two lists stay separate because their separation measurements use different valid normalizations."
+    )
+    for title, highlights in (
+        ("Predicted-risk review highlights", briefing["predicted_risk_highlights"]),
+        ("Observed-proximity review highlights", briefing["observed_proximity_highlights"]),
+    ):
+        st.subheader(title)
+        if not highlights:
+            st.info(f"No {title.lower()} were saved for this run.")
+            continue
+        for highlight in highlights:
+            track_ids = ", ".join(map(str, highlight["track_ids"]))
+            with st.expander(
+                f"Vehicles {track_ids} at {highlight['time_seconds']:.2f}s",
+                expanded=False,
+            ):
+                st.write(highlight["review_reason"])
+                st.caption(
+                    f"Measurement: {highlight['measurement']['value']:.3f} "
+                    f"{highlight['measurement']['basis']}."
+                )
+                st.write(highlight["recommended_human_action"])
+                clip_path = highlight.get("supporting_clip")
+                if isinstance(clip_path, str) and Path(clip_path).is_file():
+                    st.video(
+                        clip_path,
+                        alt="Annotated camera clip supporting this Marshal briefing item.",
+                    )
+                else:
+                    st.error(
+                        "This briefing is incomplete because its required supporting clip is missing. Reprocess the run before review.",
+                        icon=":material/error:",
+                    )
+
+
 def render_raw_data(artifacts, run_summary):
     st.header("Evidence provenance", icon=":material/description:")
     st.caption(
@@ -541,6 +616,7 @@ def render_raw_data(artifacts, run_summary):
         ("Download trajectory data", "trajectory_json"),
         ("Download observed-evidence data", "review_evidence_json"),
         ("Download predicted-risk data", "risk_evidence_json"),
+        ("Download Marshal briefing", "marshal_briefing_json"),
         ("Download run summary", "run_summary_json"),
     ):
         artifact_path = artifacts[artifact_key]
@@ -630,7 +706,14 @@ def main():
 
     view = st.segmented_control(
         "Review view",
-        ["Overview", "Camera video", "Spatial map", "Evidence queue", "Provenance"],
+        [
+            "Overview",
+            "Camera video",
+            "Spatial map",
+            "Evidence queue",
+            "Marshal briefing",
+            "Provenance",
+        ],
         default="Overview",
     )
     if view == "Overview":
@@ -661,6 +744,8 @@ def main():
             run_is_quality_assessed,
             run_summary.get("spatial_analysis_enabled", False),
         )
+    elif view == "Marshal briefing":
+        render_marshal_briefing(artifacts, run_is_quality_assessed)
     else:
         render_raw_data(artifacts, run_summary)
 

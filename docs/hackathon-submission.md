@@ -44,7 +44,11 @@ Open **Evidence queue**. Start with **Predicted risk**: TrackSight projects two 
 
 The lists are separate on purpose. Predicted separation is normalized by projected vehicle width; observed separation is normalized by detected-box diagonal. They are both useful, but they are not the same unit and should not be ranked as though they were.
 
-### 100–120 seconds — show auditability
+### 100–110 seconds — show the Marshal briefing
+
+Open **Marshal briefing**. It converts the same saved evidence into a concise handoff for a human reviewer, retaining the evidence type, track IDs, time, measurement basis, supporting clip, and recommended human action. It does not add a new model judgement or decide an incident.
+
+### 110–120 seconds — show auditability
 
 Open **Provenance**. Point out the exact source video, detector model, race-area profile, camera mode, calibration profile, and thresholds. This makes a result reproducible and lets a reviewer understand how it was generated.
 
@@ -59,6 +63,7 @@ Open **Provenance**. Point out the exact source video, detector model, race-area
 | Track-quality gate | Only sufficiently continuous, real-observation segments may create safety evidence. |
 | Separate evidence categories | Observed proximity and predicted proximity have different meanings and normalization, so the dashboard keeps them separate. |
 | Evidence clips | A score alone is not a decision; each shortlisted event is paired with a short annotated clip for review. |
+| Marshal briefing | Converts saved evidence into a concise, reproducible handoff without turning a candidate into an automated ruling. |
 
 ## Likely judge questions
 
@@ -101,6 +106,6 @@ The repository includes automated tests for camera-reference alignment, regions,
 - [ ] Run `python -m scripts.verify_completed_run` on the annotated final MP4.
 - [ ] Start the Streamlit dashboard.
 - [ ] Select the final run under **Completed run**.
-- [ ] Demonstrate Camera video → Spatial map → Evidence queue → Provenance.
+- [ ] Demonstrate Camera video → Spatial map → Evidence queue → Marshal briefing → Provenance.
 - [ ] Keep the media-attribution document with the submission.
 - [ ] Choose a source-code licence before publishing the repository publicly.

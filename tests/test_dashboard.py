@@ -8,6 +8,7 @@ from streamlit_app import (
     build_trajectory_dataframe,
     format_table_values,
     get_artifact_display_name,
+    get_run_artifacts,
     get_default_evidence_event_index,
     is_reviewable_run_summary,
 )
@@ -78,6 +79,16 @@ class DashboardRunCompatibilityTests(unittest.TestCase):
             )
 
             self.assertEqual(get_default_evidence_event_index(events), 11)
+
+    def test_finds_the_optional_marshal_briefing_artifact(self):
+        trajectory_path = Path("outputs/tracking/demo_trajectories.json")
+
+        artifacts = get_run_artifacts(trajectory_path)
+
+        self.assertEqual(
+            artifacts["marshal_briefing_json"],
+            Path("outputs/tracking/demo_marshal_briefing.json"),
+        )
 
     def test_splits_a_path_after_a_large_motion_gap(self):
         trajectories = {

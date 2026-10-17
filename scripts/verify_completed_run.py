@@ -35,6 +35,9 @@ def get_run_artifacts(output_video_path):
         "risk_evidence": output_video_path.with_name(
             f"{output_video_path.stem}_risk_evidence.json"
         ),
+        "marshal_briefing": output_video_path.with_name(
+            f"{output_video_path.stem}_marshal_briefing.json"
+        ),
         "run_summary": output_video_path.with_name(
             f"{output_video_path.stem}_run_summary.json"
         ),
@@ -87,6 +90,44 @@ def validate_video(video_path, artifact_name):
         video_capture.release()
 
 
+def validate_marshal_briefing(briefing, run_summary):
+    """Check an optional briefing agrees with the evidence counts it summarizes."""
+    if not isinstance(briefing, dict):
+        raise ValueError("Marshal briefing must be a JSON object.")
+    if briefing.get("briefing_type") != "human_review":
+        raise ValueError("Marshal briefing must be marked as human_review.")
+    summary = briefing.get("summary")
+    if not isinstance(summary, dict):
+        raise ValueError("Marshal briefing is missing its summary.")
+    if summary.get("candidate_risk_event_count") != run_summary["risk_event_count"]:
+        raise ValueError("Marshal briefing risk count does not match the run summary.")
+    if (
+        summary.get("observed_proximity_event_count")
+        != run_summary["observed_close_approach_event_count"]
+    ):
+        raise ValueError(
+            "Marshal briefing observed-proximity count does not match the run summary."
+        )
+    if not isinstance(briefing.get("predicted_risk_highlights"), list):
+        raise ValueError("Marshal briefing predicted-risk highlights must be a list.")
+    if not isinstance(briefing.get("observed_proximity_highlights"), list):
+        raise ValueError("Marshal briefing observed-proximity highlights must be a list.")
+    for highlight_type in (
+        "predicted_risk_highlights",
+        "observed_proximity_highlights",
+    ):
+        for highlight in briefing[highlight_type]:
+            supporting_clip = highlight.get("supporting_clip")
+            if not isinstance(supporting_clip, str) or not Path(supporting_clip).is_file():
+                raise ValueError(
+                    "Each Marshal briefing highlight must have a saved supporting clip."
+                )
+            validate_video(
+                supporting_clip,
+                "Marshal briefing supporting clip",
+            )
+
+
 def validate_completed_run(output_video_path):
     """Verify the files and counts from a completed run without changing them."""
     artifacts = get_run_artifacts(output_video_path)
@@ -113,6 +154,11 @@ def validate_completed_run(output_video_path):
         raise ValueError("Observed-evidence count does not match the run summary.")
     if len(risk_evidence) != run_summary["risk_event_count"]:
         raise ValueError("Risk-evidence count does not match the run summary.")
+    if artifacts["marshal_briefing"].is_file():
+        marshal_briefing = load_json_artifact(
+            artifacts["marshal_briefing"], "Marshal briefing"
+        )
+        validate_marshal_briefing(marshal_briefing, run_summary)
 
     if run_summary["spatial_analysis_enabled"]:
         validate_video(artifacts["top_down_video"], "top-down video")

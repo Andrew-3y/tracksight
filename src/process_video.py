@@ -4,8 +4,14 @@ from src.camera_motion import CameraReferenceTransformer
 from src.detect_vehicles import detect_full_frame_vehicles, filter_boxes_to_regions
 from src.regions import scale_normalized_regions
 from src.native_tracking import MotionCompensatedVehicleTracker
+from src.marshal_briefing import (
+    DEFAULT_MAX_MARSHAL_BRIEFING_HIGHLIGHTS,
+    build_marshal_briefing,
+    save_marshal_briefing,
+    select_briefing_events,
+)
 from src.pipeline import PIPELINE_VERSION
-from src.review_clips import create_review_clips
+from src.review_clips import create_event_clips, create_review_clips
 from src.review_evidence import find_close_approach_evidence, save_review_evidence
 from src.risk_assessment import (
     find_predicted_close_approach_evidence,
@@ -49,6 +55,7 @@ def process_video(
     camera_motion_method="sparseOptFlow",
     camera_mode="unknown",
     run_provenance=None,
+    max_marshal_briefing_highlights=DEFAULT_MAX_MARSHAL_BRIEFING_HIGHLIGHTS,
 ):
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
@@ -222,24 +229,64 @@ def process_video(
         priority_key="predicted_separation_vehicle_widths",
         clip_prefix="risk",
     )
+    briefing_clip_directory = output_video_path.with_name(
+        f"{output_video_path.stem}_marshal_briefing_clips"
+    )
+    create_event_clips(
+        output_video_path,
+        select_briefing_events(
+            risk_evidence,
+            "predicted_separation_vehicle_widths",
+            max_marshal_briefing_highlights,
+        ),
+        briefing_clip_directory,
+        review_pre_seconds,
+        review_post_seconds,
+        anchor_frame_key="highest_risk_frame",
+        clip_prefix="predicted_risk",
+        clip_path_key="marshal_briefing_clip_path",
+    )
+    create_event_clips(
+        output_video_path,
+        select_briefing_events(
+            review_evidence,
+            "closest_normalized_distance",
+            max_marshal_briefing_highlights,
+        ),
+        briefing_clip_directory,
+        review_pre_seconds,
+        review_post_seconds,
+        clip_prefix="observed_proximity",
+        clip_path_key="marshal_briefing_clip_path",
+    )
     save_risk_evidence(risk_evidence, risk_evidence_output_path)
     save_review_evidence(review_evidence, review_evidence_output_path)
     run_summary_output_path = output_video_path.with_name(
         f"{output_video_path.stem}_run_summary.json"
     )
-    save_run_summary(
-        build_run_summary(
-            trajectories,
-            track_quality,
+    run_summary = build_run_summary(
+        trajectories,
+        track_quality,
+        risk_evidence,
+        review_evidence,
+        pipeline_version=PIPELINE_VERSION,
+        spatial_analysis_enabled=calibration_homography is not None,
+        processed_frame_count=frame_index,
+        frames_per_second=fps,
+        run_provenance=run_provenance,
+    )
+    save_run_summary(run_summary, run_summary_output_path)
+    marshal_briefing_output_path = output_video_path.with_name(
+        f"{output_video_path.stem}_marshal_briefing.json"
+    )
+    save_marshal_briefing(
+        build_marshal_briefing(
+            run_summary,
             risk_evidence,
             review_evidence,
-            pipeline_version=PIPELINE_VERSION,
-            spatial_analysis_enabled=calibration_homography is not None,
-            processed_frame_count=frame_index,
-            frames_per_second=fps,
-            run_provenance=run_provenance,
+            max_marshal_briefing_highlights,
         ),
-        run_summary_output_path,
+        marshal_briefing_output_path,
     )
     return (
         output_video_path,
@@ -251,4 +298,5 @@ def process_video(
         risk_evidence_output_path,
         risk_review_clip_paths,
         run_summary_output_path,
+        marshal_briefing_output_path,
     )
