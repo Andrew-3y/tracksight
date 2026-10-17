@@ -1,0 +1,11 @@
+{
+  "source": {
+    "title": "24H Le Mans 2025 - CRASHES, SPINS, PURE SOUND & ACTION",
+    "url": "https://www.youtube.com/watch?v=ZfIqwcLZUas",
+    "source_start_seconds": 20,
+    "source_end_seconds": 50
+  },
+  "normalized_track_regions": {
+    "race_camera": [0.055, 0.2, 1.0, 0.82]
+  }
+}

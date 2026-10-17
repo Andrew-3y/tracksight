@@ -1,9 +1,90 @@
-def detect_vehicles(model, source_image, roi_left, roi_top, roi_right, roi_bottom):
+VEHICLE_CLASS_NAMES = {"car", "racecar", "motorcycle", "bus", "truck", "vehicle"}
+
+
+def is_vehicle_class_name(class_name):
+    """Accept common one- and two-word vehicle class names from YOLO models."""
+    normalized_name = str(class_name).strip().lower().replace("_", " ").replace("-", " ")
+    name_tokens = set(normalized_name.split())
+    return bool(name_tokens & VEHICLE_CLASS_NAMES)
+
+
+def get_vehicle_class_ids(model):
+    model_class_names = model.names
+    if isinstance(model_class_names, dict):
+        class_items = model_class_names.items()
+    else:
+        class_items = enumerate(model_class_names)
+
+    vehicle_class_ids = [
+        class_id
+        for class_id, class_name in class_items
+        if is_vehicle_class_name(class_name)
+    ]
+    if not vehicle_class_ids:
+        raise ValueError(
+            "The model does not contain any supported vehicle classes: "
+            f"{sorted(VEHICLE_CLASS_NAMES)}"
+        )
+    return vehicle_class_ids
+
+
+def detect_vehicles(
+    model,
+    source_image,
+    roi_left,
+    roi_top,
+    roi_right,
+    roi_bottom,
+    confidence_threshold=0.25,
+):
     track_region = source_image[roi_top:roi_bottom, roi_left:roi_right]
-    results = model(track_region, classes=[2], imgsz=1280, verbose=False)
+    vehicle_class_ids = get_vehicle_class_ids(model)
+    results = model(
+        track_region,
+        classes=vehicle_class_ids,
+        imgsz=1280,
+        conf=confidence_threshold,
+        agnostic_nms=True,
+        verbose=False,
+    )
     first_result = results[0]
     annotated_image = first_result.plot()
     return first_result, annotated_image
+
+
+def detect_full_frame_vehicles(model, frame, confidence_threshold):
+    """Run one consistent vehicle detector pass over a complete video frame.
+
+    Tracking must receive every detection together.  Splitting a crowded frame
+    into independent crops can give the same physical car two unrelated boxes,
+    which then produces duplicate IDs. A whole-frame pass lets YOLO perform
+    its normal non-maximum suppression before BoT-SORT associates objects.
+    """
+    if not 0 < confidence_threshold <= 1:
+        raise ValueError("Detection confidence must be above zero and at most one.")
+    vehicle_class_ids = get_vehicle_class_ids(model)
+    return model(
+        frame,
+        classes=vehicle_class_ids,
+        imgsz=1280,
+        conf=confidence_threshold,
+        agnostic_nms=True,
+        verbose=False,
+    )[0]
+
+
+def filter_boxes_to_regions(boxes, regions):
+    """Keep boxes whose centre belongs to at least one configured race area."""
+    kept_indexes = []
+    for box_index, box in enumerate(boxes.xyxy.cpu().tolist()):
+        x1, y1, x2, y2 = box
+        box_center = ((x1 + x2) / 2, (y1 + y2) / 2)
+        if any(
+            is_point_inside_box(box_center, region)
+            for region in regions.values()
+        ):
+            kept_indexes.append(box_index)
+    return boxes[kept_indexes]
 
 def convert_boxes_to_full_frame(boxes, roi_left, roi_top):
     full_frame_detections = []
@@ -124,7 +205,11 @@ def calculate_iou(box_a, box_b):
     iou = intersection_area / union_area
     return iou
 
-def remove_duplicate_detections(detections, iou_threshold):
+def remove_duplicate_detections(
+    detections,
+    iou_threshold,
+    same_region_iou_threshold=0.8,
+):
     detections_by_confidence = sorted(
         detections,
         key=lambda detection: detection["confidence"],
@@ -133,11 +218,16 @@ def remove_duplicate_detections(detections, iou_threshold):
     unique_detections = []
     for candidate_detection in detections_by_confidence:
         candidate_box = candidate_detection["xyxy"]
+        candidate_region_name = candidate_detection["region_name"]
         is_duplicate = False
         for kept_detection in unique_detections:
             kept_box = kept_detection["xyxy"]
             iou = calculate_iou(candidate_box, kept_box)
-            if iou >= iou_threshold:
+            same_region = kept_detection["region_name"] == candidate_region_name
+            duplicate_iou_threshold = (
+                same_region_iou_threshold if same_region else iou_threshold
+            )
+            if iou >= duplicate_iou_threshold:
                 is_duplicate = True
                 break
         if not is_duplicate:

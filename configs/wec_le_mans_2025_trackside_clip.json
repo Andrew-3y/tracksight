@@ -1,0 +1,11 @@
+{
+    "source": {
+        "title": "Full Race | 24 Hours of Le Mans 2025 | FIA WEC",
+        "url": "https://www.youtube.com/watch?v=F0nKaSoBZ9E",
+        "source_start_seconds": 14460,
+        "source_end_seconds": 14520
+    },
+    "normalized_track_regions": {
+        "race_camera": [0.0, 0.0, 1.0, 1.0]
+    }
+}

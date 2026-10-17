@@ -12,10 +12,13 @@ __pycache__/
 
 # Input video, trained models, and generated evidence stay local
 data/raw/
+data/training/
 outputs/
 models/*.onnx
 models/*.pt
 models/*.engine
+models/vehicle-reid-0001/
+weights/
 
 # OS files
 .DS_Store

@@ -1,31 +1,320 @@
+import argparse
+import json
 from pathlib import Path
+
 from ultralytics import YOLO
+
+from src.calibration import calculate_homography, load_calibration
 from src.process_video import process_video
 
-project_root = Path(__file__).resolve().parents[1]
-video_path = project_root / "data" / "raw" / "racecars_pexels_3774642_1920x1080_25fps.mp4"  
-model_path = project_root / "models" / "yolo26m.pt"
-model = YOLO(model_path)
-track_regions = {
-    "centre": (650, 400, 1300, 800),
-    "right": (1150, 400, 1920, 850),
-}
-output_video_path = project_root / "outputs" / "tracking" / "annotated_racecars.mp4"
-max_distance = 75
-max_missing_frames = 1
-duplicate_iou_threshold = 0.3
-crop_edge_margin = 5
-overlap_fraction_threshold = 0.25
-completed_video_path, trajectories = process_video(
-    model=model,
-    video_path=video_path,
-    output_video_path=output_video_path,
-    track_regions=track_regions,
-    max_distance=max_distance,
-    max_missing_frames=max_missing_frames,
-    duplicate_iou_threshold=duplicate_iou_threshold,
-    crop_edge_margin=crop_edge_margin,
-    overlap_fraction_threshold=overlap_fraction_threshold
-)
-print(f"Saved annotated video to: {completed_video_path}")
-print(f"Recorded {len(trajectories)} trajectory segments.")
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Detect and track vehicles in a video."
+    )
+    parser.add_argument(
+        "video_path",
+        type=Path,
+        help="Path to the video TrackSight should process.",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "models" / "yolo26m.pt",
+        help="Path to a YOLO vehicle-detection model file.",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=Path,
+        default=None,
+        help="Where to save the annotated MP4. Defaults to outputs/tracking.",
+    )
+    parser.add_argument(
+        "--regions-config",
+        type=Path,
+        default=None,
+        help="Optional JSON file describing race areas. Defaults to a same-named profile when available.",
+    )
+    parser.add_argument(
+        "--calibration-config",
+        type=Path,
+        default=None,
+        help="Optional camera-to-track calibration JSON. Defaults to a same-named calibration profile when available.",
+    )
+    parser.add_argument(
+        "--max-missing-seconds",
+        type=float,
+        default=1.5,
+        help="How long the motion-compensated tracker keeps a lost ID available for a valid recovery.",
+    )
+    parser.add_argument(
+        "--detection-confidence",
+        type=float,
+        default=0.2,
+        help="Minimum YOLO confidence required before a vehicle reaches the tracker.",
+    )
+    parser.add_argument(
+        "--tracker-high-confidence",
+        type=float,
+        default=0.3,
+        help="Confidence for BoT-SORT's first, high-quality association stage.",
+    )
+    parser.add_argument(
+        "--tracker-low-confidence",
+        type=float,
+        default=0.2,
+        help="Confidence for BoT-SORT's recovery association stage.",
+    )
+    parser.add_argument(
+        "--new-track-confidence",
+        type=float,
+        default=0.45,
+        help="Confidence required before BoT-SORT creates a brand-new internal track.",
+    )
+    parser.add_argument(
+        "--tracker-match-threshold",
+        type=float,
+        default=0.8,
+        help="BoT-SORT global-assignment threshold; higher values permit weaker matches.",
+    )
+    parser.add_argument(
+        "--close-approach-ratio",
+        type=float,
+        default=1.0,
+        help="Largest center distance, measured in average vehicle diagonals, for observed proximity evidence.",
+    )
+    parser.add_argument(
+        "--minimum-close-frames",
+        type=int,
+        default=3,
+        help="Consecutive close frames required before TrackSight records review evidence.",
+    )
+    parser.add_argument(
+        "--review-pre-seconds",
+        type=float,
+        default=2.0,
+        help="Seconds included before the closest point in each review clip.",
+    )
+    parser.add_argument(
+        "--review-post-seconds",
+        type=float,
+        default=2.0,
+        help="Seconds included after the closest point in each review clip.",
+    )
+    parser.add_argument(
+        "--max-review-clips",
+        type=int,
+        default=10,
+        help="Maximum number of non-overlapping review clips to save.",
+    )
+    parser.add_argument(
+        "--maximum-motion-gap-seconds",
+        type=float,
+        default=0.25,
+        help="Longest observation gap allowed when calculating a measured motion segment.",
+    )
+    parser.add_argument(
+        "--prediction-horizon-seconds",
+        type=float,
+        default=1.5,
+        help="How far ahead TrackSight projects measured vehicle motion for candidate-risk analysis.",
+    )
+    parser.add_argument(
+        "--maximum-predicted-separation-vehicle-widths",
+        type=float,
+        default=1.5,
+        help="Largest predicted separation, in average vehicle widths, recorded as candidate risk evidence.",
+    )
+    parser.add_argument(
+        "--minimum-risk-frames",
+        type=int,
+        default=18,
+        help="Consecutive candidate-risk frames required before TrackSight saves a risk event.",
+    )
+    parser.add_argument(
+        "--minimum-trusted-track-frames",
+        type=int,
+        default=30,
+        help="Continuous real observations required before a track may create safety evidence.",
+    )
+    parser.add_argument(
+        "--minimum-confirmed-seconds",
+        type=float,
+        default=0.2,
+        help="Continuous real-observation time required before a track receives a visible ID and is saved as trajectory data.",
+    )
+    parser.add_argument(
+        "--camera-motion-method",
+        choices=("sparseOptFlow", "none"),
+        default="sparseOptFlow",
+        help="Camera-motion compensation: sparseOptFlow for moving cameras, none for static cameras.",
+    )
+    return parser.parse_args()
+
+
+def load_tracking_config(config_path):
+    if config_path is None:
+        return {"full_frame": [0.0, 0.0, 1.0, 1.0]}
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Could not find track-region profile: {config_path}")
+
+    with config_path.open(encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    normalized_track_regions = config.get("normalized_track_regions")
+    if not isinstance(normalized_track_regions, dict) or not normalized_track_regions:
+        raise ValueError(
+            "The track-region profile must contain a non-empty 'normalized_track_regions' object."
+        )
+
+    return normalized_track_regions
+
+
+def load_calibration_homography(config_path):
+    if config_path is None:
+        return None, None, "unknown"
+    image_points, track_points, track_map_size, camera_mode = load_calibration(config_path)
+    if camera_mode == "unknown":
+        return None, None, camera_mode
+    calibration_homography = calculate_homography(image_points, track_points)
+    return calibration_homography, track_map_size, camera_mode
+
+
+def run_video_tracking():
+    arguments = parse_arguments()
+    project_root = Path(__file__).resolve().parents[1]
+    video_path = arguments.video_path
+    model_path = arguments.model_path
+    if not video_path.is_file():
+        raise FileNotFoundError(f"Could not find input video: {video_path}")
+    if not model_path.is_file():
+        raise FileNotFoundError(f"Could not find detector model: {model_path}")
+    if arguments.regions_config is None:
+        default_regions_config_path = (
+            project_root / "configs" / f"{video_path.stem}.json"
+        )
+        regions_config_path = (
+            default_regions_config_path
+            if default_regions_config_path.is_file()
+            else None
+        )
+    else:
+        regions_config_path = arguments.regions_config
+    if arguments.calibration_config is None:
+        default_calibration_config_path = (
+            project_root / "configs" / f"{video_path.stem}_calibration.json"
+        )
+        calibration_config_path = (
+            default_calibration_config_path
+            if default_calibration_config_path.is_file()
+            else None
+        )
+    else:
+        calibration_config_path = arguments.calibration_config
+    normalized_track_regions = load_tracking_config(regions_config_path)
+    calibration_homography, track_map_size, camera_mode = load_calibration_homography(
+        calibration_config_path
+    )
+    if arguments.output_path is None:
+        output_video_path = (
+            project_root
+            / "outputs"
+            / "tracking"
+            / f"annotated_{video_path.stem}.mp4"
+        )
+    else:
+        output_video_path = arguments.output_path
+    if output_video_path.resolve() == video_path.resolve():
+        raise ValueError("Output video path must not overwrite the input video.")
+
+    run_provenance = {
+        "source_video": str(video_path.resolve()),
+        "detector_model": str(model_path.resolve()),
+        "regions_profile": (
+            "full_frame" if regions_config_path is None else str(regions_config_path.resolve())
+        ),
+        "calibration_profile": (
+            None
+            if calibration_config_path is None
+            else str(calibration_config_path.resolve())
+        ),
+        "camera_mode": camera_mode,
+        "detection_confidence": arguments.detection_confidence,
+        "tracker_high_confidence": arguments.tracker_high_confidence,
+        "tracker_low_confidence": arguments.tracker_low_confidence,
+        "new_track_confidence": arguments.new_track_confidence,
+        "tracker_match_threshold": arguments.tracker_match_threshold,
+        "max_missing_seconds": arguments.max_missing_seconds,
+        "minimum_trusted_track_frames": arguments.minimum_trusted_track_frames,
+        "minimum_confirmed_seconds": arguments.minimum_confirmed_seconds,
+        "camera_motion_method": arguments.camera_motion_method,
+    }
+    model = YOLO(model_path)
+    (
+        completed_video_path,
+        trajectories,
+        trajectory_output_path,
+        review_evidence_output_path,
+        review_clip_paths,
+        top_down_video_path,
+        risk_evidence_output_path,
+        risk_review_clip_paths,
+        run_summary_output_path,
+    ) = process_video(
+        model=model,
+        video_path=video_path,
+        output_video_path=output_video_path,
+        normalized_track_regions=normalized_track_regions,
+        max_missing_seconds=arguments.max_missing_seconds,
+        detection_confidence=arguments.detection_confidence,
+        tracker_high_confidence=arguments.tracker_high_confidence,
+        tracker_low_confidence=arguments.tracker_low_confidence,
+        new_track_confidence=arguments.new_track_confidence,
+        tracker_match_threshold=arguments.tracker_match_threshold,
+        close_approach_ratio=arguments.close_approach_ratio,
+        minimum_close_frames=arguments.minimum_close_frames,
+        review_pre_seconds=arguments.review_pre_seconds,
+        review_post_seconds=arguments.review_post_seconds,
+        max_review_clips=arguments.max_review_clips,
+        calibration_homography=calibration_homography,
+        track_map_size=track_map_size,
+        maximum_motion_gap_seconds=arguments.maximum_motion_gap_seconds,
+        prediction_horizon_seconds=arguments.prediction_horizon_seconds,
+        maximum_predicted_separation_vehicle_widths=(
+            arguments.maximum_predicted_separation_vehicle_widths
+        ),
+        minimum_risk_frames=arguments.minimum_risk_frames,
+        minimum_trusted_track_frames=arguments.minimum_trusted_track_frames,
+        minimum_confirmed_seconds=arguments.minimum_confirmed_seconds,
+        camera_motion_method=arguments.camera_motion_method,
+        camera_mode=camera_mode,
+        run_provenance=run_provenance,
+    )
+    print(f"Saved annotated video to: {completed_video_path}")
+    print(f"Saved trajectory data to: {trajectory_output_path}")
+    print(f"Saved predicted-risk evidence to: {risk_evidence_output_path}")
+    print(f"Saved run summary to: {run_summary_output_path}")
+    print(
+        f"Saved {len(risk_review_clip_paths)} candidate-risk clips to: "
+        f"{risk_evidence_output_path.parent}"
+    )
+    print(f"Saved review evidence to: {review_evidence_output_path}")
+    print(f"Saved {len(review_clip_paths)} review clips to: {review_evidence_output_path.parent}")
+    if calibration_config_path is not None and camera_mode in {"fixed", "moving"}:
+        print(
+            "Used camera calibration from: "
+            f"{calibration_config_path} ({track_map_size[0]} x {track_map_size[1]} map, "
+            f"{camera_mode}-camera mode)"
+        )
+    if top_down_video_path is not None:
+        print(f"Saved top-down map video to: {top_down_video_path}")
+    elif calibration_config_path is not None:
+        print(
+            "Skipped spatial analysis because this calibration profile is marked "
+            "as unknown camera motion. The annotated camera video remains valid."
+        )
+    print(f"Recorded {len(trajectories)} trajectory segments.")
+
+
+if __name__ == "__main__":
+    run_video_tracking()
