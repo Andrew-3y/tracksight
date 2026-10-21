@@ -2,6 +2,7 @@ import cv2
 from src.calibration import project_vehicle_box
 from src.camera_motion import CameraReferenceTransformer
 from src.detect_vehicles import detect_full_frame_vehicles, filter_boxes_to_regions
+from src.evidence_package import create_marshal_evidence_package
 from src.regions import scale_normalized_regions
 from src.native_tracking import MotionCompensatedVehicleTracker
 from src.marshal_briefing import (
@@ -18,6 +19,18 @@ from src.risk_assessment import (
     save_risk_evidence,
 )
 from src.spatial_analysis import add_motion_measurements
+from src.safety_zones import (
+    build_safety_zone_evidence,
+    build_safety_zone_observations,
+    save_safety_zone_evidence,
+)
+from src.safety_candidates import (
+    DEFAULT_MAXIMUM_STATIONARY_SPREAD_VEHICLE_WIDTHS,
+    DEFAULT_MINIMUM_RESTRICTED_AREA_FRAMES,
+    DEFAULT_MINIMUM_STATIONARY_SECONDS,
+    build_safety_candidate_evidence,
+    save_safety_candidate_evidence,
+)
 from src.track_quality import (
     build_run_summary,
     build_track_quality,
@@ -56,6 +69,13 @@ def process_video(
     camera_mode="unknown",
     run_provenance=None,
     max_marshal_briefing_highlights=DEFAULT_MAX_MARSHAL_BRIEFING_HIGHLIGHTS,
+    safety_zone_profile=None,
+    safety_zone_profile_path=None,
+    minimum_stationary_seconds=DEFAULT_MINIMUM_STATIONARY_SECONDS,
+    maximum_stationary_spread_vehicle_widths=(
+        DEFAULT_MAXIMUM_STATIONARY_SPREAD_VEHICLE_WIDTHS
+    ),
+    minimum_restricted_area_frames=DEFAULT_MINIMUM_RESTRICTED_AREA_FRAMES,
 ):
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
@@ -182,6 +202,7 @@ def process_video(
     if calibration_homography is None:
         risk_evidence = []
         review_evidence = []
+        safety_zone_observations = []
     else:
         risk_evidence = find_predicted_close_approach_evidence(
             trusted_trajectories,
@@ -194,6 +215,24 @@ def process_video(
             close_approach_ratio,
             minimum_close_frames,
         )
+        safety_zone_observations = (
+            build_safety_zone_observations(
+                trusted_trajectories,
+                safety_zone_profile["zones"],
+                trusted_track_ids=trusted_trajectories.keys(),
+            )
+            if safety_zone_profile is not None
+            else []
+        )
+    safety_candidate_evidence = build_safety_candidate_evidence(
+        trusted_trajectories,
+        spatial_analysis_enabled=calibration_homography is not None,
+        safety_zone_profile=safety_zone_profile,
+        safety_zone_observations=safety_zone_observations,
+        minimum_stationary_seconds=minimum_stationary_seconds,
+        maximum_spread_vehicle_widths=maximum_stationary_spread_vehicle_widths,
+        minimum_restricted_area_frames=minimum_restricted_area_frames,
+    )
     trajectory_output_path = output_video_path.with_name(
         f"{output_video_path.stem}_trajectories.json"
     )
@@ -229,6 +268,32 @@ def process_video(
         priority_key="predicted_separation_vehicle_widths",
         clip_prefix="risk",
     )
+    safety_candidate_clips_directory = output_video_path.with_name(
+        f"{output_video_path.stem}_safety_candidate_clips"
+    )
+    safety_candidate_briefing_events = sorted(
+        [
+            *safety_candidate_evidence["stationary_vehicle_candidates"],
+            *safety_candidate_evidence["restricted_area_entry_candidates"],
+            *safety_candidate_evidence["stationary_in_active_racing_area_candidates"],
+            *safety_candidate_evidence["against_expected_direction_candidates"],
+        ],
+        key=lambda event: (
+            event["anchor_time_seconds"],
+            event["candidate_type"],
+            event["track_id"],
+        ),
+    )[:max_marshal_briefing_highlights]
+    create_event_clips(
+        output_video_path,
+        safety_candidate_briefing_events,
+        safety_candidate_clips_directory,
+        review_pre_seconds,
+        review_post_seconds,
+        anchor_frame_key="anchor_frame",
+        clip_prefix="safety_candidate",
+        clip_path_key="marshal_briefing_clip_path",
+    )
     briefing_clip_directory = output_video_path.with_name(
         f"{output_video_path.stem}_marshal_briefing_clips"
     )
@@ -261,6 +326,19 @@ def process_video(
     )
     save_risk_evidence(risk_evidence, risk_evidence_output_path)
     save_review_evidence(review_evidence, review_evidence_output_path)
+    safety_zone_evidence_output_path = None
+    if safety_zone_profile is not None:
+        safety_zone_evidence_output_path = output_video_path.with_name(
+            f"{output_video_path.stem}_safety_zone_evidence.json"
+        )
+        save_safety_zone_evidence(
+            build_safety_zone_evidence(
+                safety_zone_profile,
+                safety_zone_observations,
+                profile_path=safety_zone_profile_path,
+            ),
+            safety_zone_evidence_output_path,
+        )
     run_summary_output_path = output_video_path.with_name(
         f"{output_video_path.stem}_run_summary.json"
     )
@@ -274,19 +352,75 @@ def process_video(
         processed_frame_count=frame_index,
         frames_per_second=fps,
         run_provenance=run_provenance,
+        safety_zone_observation_count=len(safety_zone_observations),
+        camera_trust_diagnostics=(
+            camera_reference_transformer.get_diagnostics()
+            if camera_reference_transformer is not None
+            else {
+                "method": (
+                    "not_available_without_camera_calibration"
+                    if calibration_homography is None
+                    else "not_required_fixed_camera"
+                    if camera_mode == "fixed"
+                    else "not_available_for_unknown_camera_mode"
+                ),
+                "frame_outcomes": {},
+            }
+        ),
+        safety_candidate_counts={
+            "stationary_vehicle": len(
+                safety_candidate_evidence["stationary_vehicle_candidates"]
+            ),
+            "restricted_area_entry": len(
+                safety_candidate_evidence["restricted_area_entry_candidates"]
+            ),
+            "stationary_in_active_racing_area": len(
+                safety_candidate_evidence["stationary_in_active_racing_area_candidates"]
+            ),
+            "against_expected_direction": len(
+                safety_candidate_evidence["against_expected_direction_candidates"]
+            ),
+        },
     )
     save_run_summary(run_summary, run_summary_output_path)
     marshal_briefing_output_path = output_video_path.with_name(
         f"{output_video_path.stem}_marshal_briefing.json"
     )
-    save_marshal_briefing(
-        build_marshal_briefing(
-            run_summary,
-            risk_evidence,
-            review_evidence,
-            max_marshal_briefing_highlights,
+    marshal_briefing = build_marshal_briefing(
+        run_summary,
+        risk_evidence,
+        review_evidence,
+        max_marshal_briefing_highlights,
+        safety_candidate_evidence=safety_candidate_evidence,
+    )
+    save_marshal_briefing(marshal_briefing, marshal_briefing_output_path)
+    safety_candidate_evidence_output_path = output_video_path.with_name(
+        f"{output_video_path.stem}_safety_candidates.json"
+    )
+    save_safety_candidate_evidence(
+        safety_candidate_evidence,
+        safety_candidate_evidence_output_path,
+    )
+    marshal_evidence_package_output_path = output_video_path.with_name(
+        f"{output_video_path.stem}_marshal_evidence_package.zip"
+    )
+    create_marshal_evidence_package(
+        marshal_evidence_package_output_path,
+        marshal_briefing,
+        run_summary,
+        risk_evidence,
+        review_evidence,
+        trajectories,
+        safety_zone_evidence=(
+            None
+            if safety_zone_profile is None
+            else build_safety_zone_evidence(
+                safety_zone_profile,
+                safety_zone_observations,
+                profile_path=safety_zone_profile_path,
+            )
         ),
-        marshal_briefing_output_path,
+        safety_candidate_evidence=safety_candidate_evidence,
     )
     return (
         output_video_path,
@@ -299,4 +433,7 @@ def process_video(
         risk_review_clip_paths,
         run_summary_output_path,
         marshal_briefing_output_path,
+        marshal_evidence_package_output_path,
+        safety_zone_evidence_output_path,
+        safety_candidate_evidence_output_path,
     )

@@ -6,6 +6,8 @@ from ultralytics import YOLO
 
 from src.calibration import calculate_homography, load_calibration
 from src.process_video import process_video
+from src.safety_zones import load_safety_zone_profile
+from src.input_sources import classify_input_source
 
 
 def parse_arguments():
@@ -14,8 +16,8 @@ def parse_arguments():
     )
     parser.add_argument(
         "video_path",
-        type=Path,
-        help="Path to the video TrackSight should process.",
+        type=str,
+        help="Existing video path, or an rtsp/http(s) input URL TrackSight should record and process.",
     )
     parser.add_argument(
         "--model-path",
@@ -40,6 +42,12 @@ def parse_arguments():
         type=Path,
         default=None,
         help="Optional camera-to-track calibration JSON. Defaults to a same-named calibration profile when available.",
+    )
+    parser.add_argument(
+        "--safety-zone-config",
+        type=Path,
+        default=None,
+        help="Optional local-track safety-zone JSON. Defaults to a same-named profile when available and requires camera calibration.",
     )
     parser.add_argument(
         "--max-missing-seconds",
@@ -155,6 +163,24 @@ def parse_arguments():
         default=5,
         help="Maximum supported review cards saved for each Marshal briefing evidence type.",
     )
+    parser.add_argument(
+        "--minimum-stationary-seconds",
+        type=float,
+        default=1.0,
+        help="Consecutive real calibrated seconds required before TrackSight saves a low-displacement vehicle candidate.",
+    )
+    parser.add_argument(
+        "--maximum-stationary-spread-vehicle-widths",
+        type=float,
+        default=0.75,
+        help="Largest observed stationary-candidate spread, measured in that segment's median projected vehicle widths.",
+    )
+    parser.add_argument(
+        "--minimum-restricted-area-frames",
+        type=int,
+        default=3,
+        help="Consecutive real calibrated frames required in a reviewer-defined restricted area before saving a candidate.",
+    )
     return parser.parse_args()
 
 
@@ -189,15 +215,23 @@ def load_calibration_homography(config_path):
 def run_video_tracking():
     arguments = parse_arguments()
     project_root = Path(__file__).resolve().parents[1]
-    video_path = arguments.video_path
+    source_info = classify_input_source(arguments.video_path)
+    video_path = (
+        Path(source_info["source"])
+        if source_info["source_type"] == "video_file"
+        else source_info["source"]
+    )
+    source_stem = (
+        Path(source_info["source"]).stem
+        if source_info["source_type"] == "video_file"
+        else "live_stream"
+    )
     model_path = arguments.model_path
-    if not video_path.is_file():
-        raise FileNotFoundError(f"Could not find input video: {video_path}")
     if not model_path.is_file():
         raise FileNotFoundError(f"Could not find detector model: {model_path}")
     if arguments.regions_config is None:
         default_regions_config_path = (
-            project_root / "configs" / f"{video_path.stem}.json"
+            project_root / "configs" / f"{source_stem}.json"
         )
         regions_config_path = (
             default_regions_config_path
@@ -208,7 +242,7 @@ def run_video_tracking():
         regions_config_path = arguments.regions_config
     if arguments.calibration_config is None:
         default_calibration_config_path = (
-            project_root / "configs" / f"{video_path.stem}_calibration.json"
+            project_root / "configs" / f"{source_stem}_calibration.json"
         )
         calibration_config_path = (
             default_calibration_config_path
@@ -217,24 +251,57 @@ def run_video_tracking():
         )
     else:
         calibration_config_path = arguments.calibration_config
+    if arguments.safety_zone_config is None:
+        default_safety_zone_config_path = (
+            project_root / "configs" / f"{source_stem}_safety_zones.json"
+        )
+        safety_zone_config_path = (
+            default_safety_zone_config_path
+            if default_safety_zone_config_path.is_file()
+            else None
+        )
+    else:
+        safety_zone_config_path = arguments.safety_zone_config
     normalized_track_regions = load_tracking_config(regions_config_path)
     calibration_homography, track_map_size, camera_mode = load_calibration_homography(
         calibration_config_path
     )
+    if safety_zone_config_path is not None and calibration_homography is None:
+        raise ValueError(
+            "Safety zones require a usable camera calibration because their coordinates are local track units."
+        )
+    safety_zone_profile = (
+        None
+        if safety_zone_config_path is None
+        else load_safety_zone_profile(safety_zone_config_path)
+    )
     if arguments.output_path is None:
+        if source_info["requires_recording_output"]:
+            raise ValueError(
+                "A network stream needs an explicit --output-path so TrackSight can "
+                "record a reviewable MP4 rather than overwrite an unknown source."
+            )
         output_video_path = (
             project_root
             / "outputs"
             / "tracking"
-            / f"annotated_{video_path.stem}.mp4"
+            / f"annotated_{source_stem}.mp4"
         )
     else:
         output_video_path = arguments.output_path
-    if output_video_path.resolve() == video_path.resolve():
+    if (
+        source_info["source_type"] == "video_file"
+        and output_video_path.resolve() == video_path.resolve()
+    ):
         raise ValueError("Output video path must not overwrite the input video.")
 
     run_provenance = {
-        "source_video": str(video_path.resolve()),
+        "source_video": (
+            str(video_path.resolve())
+            if source_info["source_type"] == "video_file"
+            else source_info["source"]
+        ),
+        "input_source_type": source_info["source_type"],
         "detector_model": str(model_path.resolve()),
         "regions_profile": (
             "full_frame" if regions_config_path is None else str(regions_config_path.resolve())
@@ -243,6 +310,11 @@ def run_video_tracking():
             None
             if calibration_config_path is None
             else str(calibration_config_path.resolve())
+        ),
+        "safety_zone_profile": (
+            None
+            if safety_zone_config_path is None
+            else str(safety_zone_config_path.resolve())
         ),
         "camera_mode": camera_mode,
         "detection_confidence": arguments.detection_confidence,
@@ -254,6 +326,11 @@ def run_video_tracking():
         "minimum_trusted_track_frames": arguments.minimum_trusted_track_frames,
         "minimum_confirmed_seconds": arguments.minimum_confirmed_seconds,
         "camera_motion_method": arguments.camera_motion_method,
+        "minimum_stationary_seconds": arguments.minimum_stationary_seconds,
+        "maximum_stationary_spread_vehicle_widths": (
+            arguments.maximum_stationary_spread_vehicle_widths
+        ),
+        "minimum_restricted_area_frames": arguments.minimum_restricted_area_frames,
     }
     model = YOLO(model_path)
     (
@@ -267,6 +344,9 @@ def run_video_tracking():
         risk_review_clip_paths,
         run_summary_output_path,
         marshal_briefing_output_path,
+        marshal_evidence_package_output_path,
+        safety_zone_evidence_output_path,
+        safety_candidate_evidence_output_path,
     ) = process_video(
         model=model,
         video_path=video_path,
@@ -297,12 +377,23 @@ def run_video_tracking():
         camera_mode=camera_mode,
         run_provenance=run_provenance,
         max_marshal_briefing_highlights=arguments.max_marshal_briefing_highlights,
+        safety_zone_profile=safety_zone_profile,
+        safety_zone_profile_path=safety_zone_config_path,
+        minimum_stationary_seconds=arguments.minimum_stationary_seconds,
+        maximum_stationary_spread_vehicle_widths=(
+            arguments.maximum_stationary_spread_vehicle_widths
+        ),
+        minimum_restricted_area_frames=arguments.minimum_restricted_area_frames,
     )
     print(f"Saved annotated video to: {completed_video_path}")
     print(f"Saved trajectory data to: {trajectory_output_path}")
     print(f"Saved predicted-risk evidence to: {risk_evidence_output_path}")
     print(f"Saved run summary to: {run_summary_output_path}")
     print(f"Saved Marshal briefing to: {marshal_briefing_output_path}")
+    print(f"Saved Marshal evidence package to: {marshal_evidence_package_output_path}")
+    if safety_zone_evidence_output_path is not None:
+        print(f"Saved safety-zone evidence to: {safety_zone_evidence_output_path}")
+    print(f"Saved safety candidates to: {safety_candidate_evidence_output_path}")
     print(
         f"Saved {len(risk_review_clip_paths)} candidate-risk clips to: "
         f"{risk_evidence_output_path.parent}"

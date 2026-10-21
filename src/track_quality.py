@@ -55,6 +55,9 @@ def build_run_summary(
     processed_frame_count,
     frames_per_second,
     run_provenance=None,
+    safety_zone_observation_count=0,
+    camera_trust_diagnostics=None,
+    safety_candidate_counts=None,
 ):
     """Create compact dashboard metadata from the full auditable output."""
     trusted_track_count = sum(
@@ -90,10 +93,26 @@ def build_run_summary(
         "observations_per_frame": observations_per_frame,
         "risk_event_count": len(risk_evidence),
         "observed_close_approach_event_count": len(review_evidence),
+        "safety_zone_observation_count": safety_zone_observation_count,
         "track_quality": track_quality,
     }
     if run_provenance is not None:
         summary["run_provenance"] = run_provenance
+    if camera_trust_diagnostics is not None:
+        summary["camera_trust_diagnostics"] = camera_trust_diagnostics
+    if safety_candidate_counts is not None:
+        summary["stationary_vehicle_candidate_count"] = int(
+            safety_candidate_counts.get("stationary_vehicle", 0)
+        )
+        summary["restricted_area_entry_candidate_count"] = int(
+            safety_candidate_counts.get("restricted_area_entry", 0)
+        )
+        summary["stationary_in_active_racing_area_candidate_count"] = int(
+            safety_candidate_counts.get("stationary_in_active_racing_area", 0)
+        )
+        summary["against_expected_direction_candidate_count"] = int(
+            safety_candidate_counts.get("against_expected_direction", 0)
+        )
     return summary
 
 

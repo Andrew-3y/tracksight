@@ -1,47 +1,30 @@
 # TrackSight Marshal
 
-TrackSight Marshal is a computer-vision system for reviewing race footage. It turns vehicle observations into auditable spatial evidence for a human reviewer. It supports a calibrated fixed camera directly, or a calibrated moving camera by first aligning each frame to the calibration reference from stable background features.
+TrackSight Marshal is a local race-footage review tool. Give it a video, and it produces an annotated replay, tracked vehicle trajectories, and a dashboard that helps a human reviewer find moments worth watching again.
 
-```text
-video → detections → tracking → calibrated trajectories → motion → candidate risk → evidence clips + dashboard
-```
+The point is not to replace race control. The point is to make review less manual: instead of scrubbing through an entire session, a reviewer can start with the moments where the system saw two tracked vehicles come unusually close, then inspect the supporting video and decide what happened.
 
-It is designed to reduce the amount of footage a human reviewer needs to inspect. It does **not** declare that a close approach is a crash, a rule violation, or proof of fault.
+## What it does
 
-## Hackathon demo in one minute
+- Detects vehicles in race footage and assigns temporary track IDs while the association is reliable.
+- Keeps a record of real detector observations separately from estimated tracker positions.
+- Supports camera-specific race-area profiles, so cars outside the relevant track area can be excluded.
+- Projects trusted vehicle positions into a local top-down track view when a camera has been calibrated.
+- Saves observed close-approach evidence and short-term predicted-close-approach evidence as separate records.
+- Produces short review clips, an annotated camera video, trajectories, provenance, and an optional Marshal evidence package.
+- Provides a Streamlit dashboard for replay, human review, a decision ledger, evidence integrity checks, and handover.
 
-TrackSight Marshal takes race footage and produces a reviewable chain of evidence:
+The dashboard is deliberately run-aware. A camera-only run does not show spatial-review or incident tools that need calibration and saved candidate evidence. An evidence-rich calibrated run exposes those tools when they are actually useful.
 
-1. **Annotated camera video** shows the vehicles that were detected and assigned a temporary on-screen ID.
-2. **Spatial digital twin** maps confirmed vehicle footpoints into a calibrated local track view, including a moving-camera stabilization step when needed.
-3. **Evidence queue** separates observed proximity from predicted close approaches and opens short supporting clips for a human reviewer.
-4. **Marshal briefing** turns the saved evidence into two separate, plain-language review lists with clips and a recommended human action.
-5. **Provenance** records the input video, model, calibration, and settings that produced the result.
+## What it does not claim
 
-For the included TCR demonstration clip, process the video and then open the dashboard:
+TrackSight does not decide who was at fault, confirm contact, declare a rule breach, or replace an official. It also does not claim physical metres, km/h, telemetry, or permanent vehicle identity from video alone.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m src.run_video_tracking ".\data\raw\tcr_world_tour_el_pinar_2023_clean_pack.mp4" --output-path ".\outputs\tracking\tracksight_marshal_tcr_clean_pack_final.mp4"
-streamlit run streamlit_app.py
-```
+Every candidate is evidence for a human to inspect, not a verdict.
 
-In the dashboard, choose `tracksight_marshal_tcr_clean_pack_final` under **Completed run**. For a suggested narration and likely judge questions, see [the hackathon guide](docs/hackathon-submission.md).
+## Quick start
 
-## What it produces
-
-- An annotated MP4 showing detected vehicles and motion-compensated BoT-SORT IDs while they remain reliably associated on screen.
-- A perspective-corrected top-down MP4 when the camera has a usable calibration profile.
-- A trajectory JSON file containing each confirmed vehicle's observed positions, confidence, calibrated track position, and motion status.
-- A review-evidence JSON file listing sustained close approaches between two tracked vehicles.
-- A predicted-risk JSON file listing pairs that are projected to reach a small separation during a short future horizon.
-- A Marshal-briefing JSON file that presents the strongest predicted and observed evidence separately for human review.
-- A run-summary JSON file that distinguishes all saved ID segments from the segments trusted for safety analysis.
-- Up to ten short annotated review clips around the closest, non-overlapping evidence moments.
-- Up to ten short annotated clips around the strongest candidate-risk moments.
-- A local Streamlit dashboard for reviewing all saved evidence from one completed run.
-
-## Install
+Create and activate a virtual environment, then install the project dependencies:
 
 ```powershell
 py -3.14 -m venv .venv
@@ -49,133 +32,106 @@ py -3.14 -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-## Run on a video
-
-Place a video anywhere on your computer and provide its path. You also need a compatible YOLO model file.
+Start the dashboard:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m src.run_video_tracking ".\data\raw\your_race_video.mp4" --model-path ".\models\your_model.pt"
-```
-
-If no region profile exists, TrackSight uses the full frame automatically. For footage that includes pits, spectators, or other irrelevant areas, provide an optional profile with `--regions-config` to restrict detection to race areas.
-
-## Calibrate a camera view
-
-For spatial analysis, create one calibration profile for each camera view:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m scripts.calibrate_track ".\data\raw\your_race_video.mp4"
-```
-
-The tool asks you to click four corners of a flat road corridor in clockwise order. It saves `configs/<video-name>_calibration.json` and a top-down preview. When its name matches the video name, the runner loads it automatically.
-
-Calibration removes much of the camera's perspective distortion. For a moving view, TrackSight additionally estimates the view's movement from background features and aligns every frame to the calibration reference before projecting vehicle positions. The resulting coordinates are **local track units**, not metres, until a real-world scale reference is supplied.
-
-## Outputs
-
-For an input video named `your_race_video.mp4`, TrackSight writes to `outputs/tracking/`:
-
-- `annotated_your_race_video.mp4`
-- `annotated_your_race_video_top_down.mp4` when calibration is available
-- `annotated_your_race_video_trajectories.json`
-- `annotated_your_race_video_review_evidence.json`
-- `annotated_your_race_video_review_clips/`
-- `annotated_your_race_video_risk_evidence.json`
-- `annotated_your_race_video_risk_review_clips/`
-- `annotated_your_race_video_marshal_briefing.json`
-- `annotated_your_race_video_marshal_briefing_clips/`
-- `annotated_your_race_video_run_summary.json`
-
-## Review dashboard
-
-After processing a video, open the local dashboard:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
 streamlit run streamlit_app.py
 ```
 
-The dashboard reads saved output files only. It never reruns detection when you open a video, map, trajectory chart, or evidence clip.
+Open the address Streamlit prints in the terminal, normally `http://localhost:8501`.
 
-## Submission preflight
+From there, choose **Run analysis** to process a video, or **Review completed run** to inspect a saved result. The dashboard reads saved outputs; it does not rerun the detector when you open a review screen.
 
-Before demonstrating or submitting a completed run, verify that the annotated
-MP4 can be decoded and that its trajectory, evidence, and run-summary files
-agree with one another. This check is read-only: it never changes the video or
-its evidence.
+## Run from the command line
+
+You can also process a local video directly:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+python -m src.run_video_tracking ".\data\raw\your_race_video.mp4" --model-path ".\models\your_model.pt"
+```
+
+For broad footage that includes pits, spectator areas, or access roads, add a race-area profile:
+
+```powershell
+python -m src.run_video_tracking ".\data\raw\your_race_video.mp4" `
+  --model-path ".\models\your_model.pt" `
+  --regions-config ".\configs\your_race_video.json"
+```
+
+Profiles are tied to a specific camera view. TrackSight does not apply one camera's profile to another video by default.
+
+## Calibrate a camera view
+
+Calibration is optional. Without it, TrackSight can still produce an annotated camera video and trajectories. With it, it can create a local top-down view and use spatial evidence safeguards.
+
+```powershell
+python -m scripts.calibrate_track ".\data\raw\your_race_video.mp4"
+```
+
+Click four points around a flat section of track in clockwise order. The tool saves a camera-specific calibration file under `configs/`. The resulting map uses local track units, not metres, unless a real-world scale reference is supplied.
+
+For moving broadcast footage, TrackSight uses stable background features to align frames to the calibration reference. If that alignment is not reliable, the system withholds spatial safety analysis rather than pretending that an uncalibrated measurement is precise.
+
+## What you get after a run
+
+For a video called `your_race_video.mp4`, saved outputs appear under `outputs/tracking/`:
+
+- `annotated_your_race_video.mp4` — the detected vehicles and their current track IDs.
+- `annotated_your_race_video_trajectories.json` — real observed positions and associated tracking information.
+- `annotated_your_race_video_run_summary.json` — the run's settings, coverage, and continuity information.
+- `annotated_your_race_video_review_evidence.json` — observed close-approach records, when spatial review is available.
+- `annotated_your_race_video_risk_evidence.json` — predicted close-approach records, when enough measured motion is available.
+- Review clips, a top-down video, a Marshal briefing, and an evidence package when that run creates them.
+
+The exact files depend on the video and whether it has a usable calibration and saved evidence. Missing spatial outputs do not mean the video failed; they can simply mean that the run was intentionally camera-only.
+
+## Dashboard walkthrough
+
+For a typical calibrated evidence run, the best demo path is:
+
+1. **Overview** — see what was processed and what was withheld.
+2. **Camera video** — inspect the annotated source footage.
+3. **Evidence queue** — choose an observed or predicted close-approach record.
+4. **Incident replay** or **Safety command center** — inspect the saved evidence, supporting replay, and review ladder for one case.
+5. **Human review decisions** — record a human outcome without changing the underlying evidence.
+6. **Decision ledger** and **Evidence integrity** — show the audit trail and the generated files behind it.
+
+Other views are available when their inputs exist. For example, telemetry correlation appears for a run with evidence because it accepts an optional reviewer-supplied CSV; safety zones appear only when that run has zone evidence.
+
+## Verify a completed run
+
+Before a demo or handover, verify that the recorded video and its JSON outputs agree:
+
+```powershell
 python -m scripts.verify_completed_run ".\outputs\tracking\annotated_your_race_video.mp4"
 ```
 
-For a calibrated moving broadcast camera, a successful preflight should report
-that spatial analysis is enabled with camera stabilization. The annotated camera
-video, local map, and candidate evidence remain review artifacts: cuts, heavy
-zoom changes, weak background detail, or inaccurate calibration can still make
-the spatial result unreliable.
+This is a read-only preflight check. It does not change the video or any evidence file.
 
-## Training-data quality gates
+## Development checks
 
-TrackSight uses one final class, `vehicle`. A source dataset may use many
-classes, however, so only source class IDs that actually mean road or race
-vehicles may be imported. The importer requires those IDs explicitly rather
-than converting every labelled object into a vehicle.
-
-For example, if a downloaded source defines race cars as source class `4`, its
-import command must include `--vehicle-class-ids 4`. If it defines road cars
-and trucks as `2` and `7`, use `--vehicle-class-ids 2 7`. The numbers come from
-the source dataset's class list; they are not TrackSight vehicle IDs.
-
-Before training, TrackSight validates that every YOLO box is numeric, belongs
-to the correct class, has a non-zero size, and stays completely within the
-image. It also has two read-only review tools:
+Run the test suite from the project root:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m scripts.review_vehicle_labels "<images-folder>" "<labels-folder>" "<empty-review-output-folder>"
-python -m scripts.audit_vehicle_labels "<images-folder>" "<labels-folder>" "<new-audit-report.json>"
+python -m unittest discover -s tests
 ```
 
-The first command renders boxes on copied images so a person can inspect them.
-The second reports near-identical boxes, which are possible accidental duplicate
-labels. It does not delete or change any source label: overlap alone cannot tell
-whether the labels are two cars in an occlusion or an error.
+The tests cover the detection/tracking pipeline, calibration safeguards, saved evidence formats, dashboard workflows, and audit records. They prove the project logic behaves as expected for its test cases; they do not turn a video-only system into a guarantee for every camera, weather condition, occlusion, or race series.
 
-## How close-approach evidence works
+## Limitations worth knowing
 
-For every frame, TrackSight compares the centres of vehicles from trusted track segments. A pair is considered close only when its centre distance is within a configurable number of average vehicle-box diagonals, and it remains close for multiple consecutive frames. This normalizes the measurement for different video resolutions and apparent vehicle sizes.
+- Vehicle detection and ID continuity can degrade with heavy occlusion, camera cuts, blur, poor lighting, or dense packs.
+- A long occlusion or edit can create a new ID segment. TrackSight records segments rather than claiming a permanent identity it cannot prove.
+- Calibration is camera-specific. A profile from one viewpoint is not valid for a different viewpoint.
+- Spatial evidence is withheld when the saved camera conditions do not pass the project's safeguards.
+- Candidate events are prompts for human review. They are not automatic incident decisions.
 
-The defaults are intentionally review-oriented:
+## Project notes
 
-- `--close-approach-ratio 1.0`
-- `--minimum-close-frames 3`
-- `--review-pre-seconds 2.0`
-- `--review-post-seconds 2.0`
-- `--max-review-clips 10`
+The dashboard and all processing run locally. Optional evidence files store the records created for one run; reviewer decisions, corrections, and second opinions are kept separate from the original detector evidence so the source record remains auditable.
 
-These values can be changed at the command line for a specific review policy.
-
-## How predicted-risk evidence works
-
-For pairs with calibrated positions and measured motion, TrackSight compares their relative position and relative velocity. It projects both vehicles forward for a short horizon, finds the moment of minimum predicted separation, and normalizes that separation by the pair's projected vehicle widths.
-
-The defaults are deliberately conservative and review-oriented:
-
-- `--prediction-horizon-seconds 1.5`
-- `--maximum-predicted-separation-vehicle-widths 1.5`
-- `--minimum-risk-frames 18`
-- `--maximum-motion-gap-seconds 0.25`
-- `--minimum-trusted-track-frames 30`
-
-TrackSight does not calculate a risk prediction if either vehicle has no calibration, does not have a continuous history of real observations, or has a detection gap longer than the configured maximum. This prevents the system from presenting an invented velocity as measured evidence.
-
-## Important limitations
-
-Vehicle detection and identity continuity depend on the model, camera angle, occlusion, lighting, and the quality of the footage. No video-only tracker can honestly guarantee a permanent identity after a long occlusion, an edit, or a camera cut. Camera stabilization relies on stable visible background features and should be treated cautiously through abrupt cuts or major zoom changes. Calibration is camera-specific and local-map positions are not physical metres without a scale reference. TrackSight flags evidence for human review; it does not replace race officials or make automated incident decisions.
+For hackathon narration and suggested judge questions, see [docs/hackathon-submission.md](docs/hackathon-submission.md). Demonstration-media attribution is in [docs/media-attribution.md](docs/media-attribution.md).
 
 ## License
 
-No public source-code licence has been selected yet. The demonstration footage has separate attribution and licence terms in [media attribution](docs/media-attribution.md).
+No public source-code licence has been selected yet. Demo footage and datasets have their own attribution and licence terms.

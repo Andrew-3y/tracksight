@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "coordinate_system": "local_track_units",
+  "zones": [
+    {
+      "zone_id": "pit_exit_merge",
+      "label": "Pit-exit merge",
+      "category": "merge area",
+      "candidate_rule": "none",
+      "polygon": [[120.0, 240.0], [260.0, 220.0], [300.0, 330.0], [150.0, 350.0]],
+      "review_note": "Example coordinates only. Replace every vertex after calibrating the specific camera view."
+    },
+    {
+      "zone_id": "main_straight_corridor",
+      "label": "Main straight corridor",
+      "category": "active racing area",
+      "candidate_rule": "against_expected_direction",
+      "expected_local_track_direction": [1.0, 0.0],
+      "polygon": [[320.0, 200.0], [700.0, 200.0], [700.0, 300.0], [320.0, 300.0]],
+      "review_note": "Example only. The local direction vector must match this camera's calibrated local-track map."
+    }
+  ]
+}

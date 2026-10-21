@@ -5,11 +5,16 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 
 from streamlit_app import (
+    build_race_control_timeline_dataframe,
     build_trajectory_dataframe,
+    build_human_review_queue,
+    filter_race_control_timeline,
     format_table_values,
     get_artifact_display_name,
     get_run_artifacts,
     get_default_evidence_event_index,
+    get_source_evidence_event,
+    get_human_review_event_summary,
     is_reviewable_run_summary,
 )
 
@@ -89,6 +94,14 @@ class DashboardRunCompatibilityTests(unittest.TestCase):
             artifacts["marshal_briefing_json"],
             Path("outputs/tracking/demo_marshal_briefing.json"),
         )
+        self.assertEqual(
+            artifacts["safety_zone_evidence_json"],
+            Path("outputs/tracking/demo_safety_zone_evidence.json"),
+        )
+        self.assertEqual(
+            artifacts["safety_candidate_evidence_json"],
+            Path("outputs/tracking/demo_safety_candidates.json"),
+        )
 
     def test_splits_a_path_after_a_large_motion_gap(self):
         trajectories = {
@@ -121,6 +134,89 @@ class DashboardRunCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(dataframe["frame"].tolist(), [0, 1, 3])
         self.assertEqual(dataframe["trajectory_segment"].tolist(), ["1-0", "1-0", "1-1"])
+
+    def test_timeline_keeps_evidence_types_separate_and_filters_by_vehicle(self):
+        timeline = build_race_control_timeline_dataframe(
+            review_events=[
+                {
+                    "track_ids": [2, 3],
+                    "closest_frame": 10,
+                    "closest_time_seconds": 0.4,
+                    "closest_normalized_distance": 0.5,
+                    "review_clip_path": "observed.mp4",
+                }
+            ],
+            risk_events=[
+                {
+                    "track_ids": [1, 2],
+                    "highest_risk_frame": 20,
+                    "highest_risk_time_seconds": 0.8,
+                    "predicted_separation_vehicle_widths": 0.3,
+                    "review_clip_path": "risk.mp4",
+                }
+            ],
+        )
+
+        filtered = filter_race_control_timeline(
+            timeline,
+            selected_evidence_types=["Observed proximity"],
+            selected_track_ids=[3],
+            selected_time_range=(0.0, 1.0),
+        )
+
+        self.assertEqual(timeline["evidence_type"].tolist(), ["Predicted risk", "Observed proximity"])
+        self.assertEqual(filtered["event_key"].tolist(), ["observed-0"])
+        self.assertEqual(
+            filtered.iloc[0]["measurement_basis"],
+            "average detected-box diagonals",
+        )
+
+    def test_returns_the_persisted_record_for_a_timeline_event_key(self):
+        predicted_event = {"track_ids": [1, 2], "highest_risk_frame": 20}
+        observed_event = {"track_ids": [2, 3], "closest_frame": 10}
+
+        self.assertIs(
+            get_source_evidence_event("predicted-0", [observed_event], [predicted_event]),
+            predicted_event,
+        )
+        self.assertIs(
+            get_source_evidence_event("observed-0", [observed_event], [predicted_event]),
+            observed_event,
+        )
+
+    def test_review_queue_does_not_reuse_a_decision_for_changed_evidence(self):
+        timeline = build_race_control_timeline_dataframe(
+            review_events=[],
+            risk_events=[
+                {
+                    "track_ids": [1, 2],
+                    "highest_risk_frame": 20,
+                    "highest_risk_time_seconds": 0.8,
+                    "predicted_separation_vehicle_widths": 0.3,
+                    "review_clip_path": "risk.mp4",
+                }
+            ],
+        )
+        event = timeline.iloc[0]
+        summary = get_human_review_event_summary(event)
+        decisions = {
+            "decisions": {
+                event["review_event_id"]: {
+                    "event": summary,
+                    "outcome": "Cleared",
+                    "reviewer_name": "Andre",
+                    "updated_at": "2026-10-18T01:00:00+00:00",
+                }
+            }
+        }
+
+        reviewed_queue = build_human_review_queue(timeline, decisions)
+        changed_timeline = timeline.copy()
+        changed_timeline.loc[0, "measurement_value"] = 0.4
+        changed_queue = build_human_review_queue(changed_timeline, decisions)
+
+        self.assertEqual(reviewed_queue.iloc[0]["review_status"], "Cleared")
+        self.assertEqual(changed_queue.iloc[0]["review_status"], "Unreviewed")
 
 if __name__ == "__main__":
     unittest.main()

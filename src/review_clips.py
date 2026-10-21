@@ -54,6 +54,7 @@ def create_review_clips(
     anchor_frame_key="closest_frame",
     priority_key="closest_normalized_distance",
     clip_prefix="review",
+    clip_path_key="review_clip_path",
 ):
     """Create compact, non-overlapping clips for the general evidence queue."""
     video_capture = cv2.VideoCapture(str(annotated_video_path))
@@ -80,6 +81,7 @@ def create_review_clips(
         post_event_seconds,
         anchor_frame_key=anchor_frame_key,
         clip_prefix=clip_prefix,
+        clip_path_key=clip_path_key,
     )
 
 
@@ -108,11 +110,11 @@ def create_event_clips(
     pre_event_frames = round(pre_event_seconds * fps)
     post_event_frames = round(post_event_seconds * fps)
     for clip_number, event in enumerate(events, start=1):
-        track_id_a, track_id_b = event["track_ids"]
+        track_id_label = "_".join(str(track_id) for track_id in event["track_ids"])
         start_frame = max(0, event[anchor_frame_key] - pre_event_frames)
         end_frame = event[anchor_frame_key] + post_event_frames
         review_clip_path = output_directory / (
-            f"{clip_prefix}_{clip_number:02d}_tracks_{track_id_a}_{track_id_b}_"
+            f"{clip_prefix}_{clip_number:02d}_tracks_{track_id_label}_"
             f"frame_{event[anchor_frame_key]}.mp4"
         )
         video_writer, working_clip_path = create_working_video_writer(

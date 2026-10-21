@@ -71,11 +71,41 @@ def build_observed_proximity_highlight(event):
     }
 
 
+def build_safety_candidate_highlight(event, run_summary):
+    """Describe a saved safety candidate from its explicit evidence fields."""
+    track_id = event["track_id"]
+    quality = run_summary.get("track_quality", {}).get(str(track_id), {})
+    continuity_status = (
+        "passed the saved continuity gate"
+        if quality.get("trusted_for_safety_analysis", False)
+        else "did not pass the saved continuity gate"
+    )
+    return {
+        "evidence_type": event["candidate_type"],
+        "track_ids": list(event["track_ids"]),
+        "frame": event["anchor_frame"],
+        "time_seconds": event["anchor_time_seconds"],
+        "frame_count": event["frame_count"],
+        "measurement": {
+            "value": event.get("maximum_spread_vehicle_widths"),
+            "basis": event["measurement_basis"],
+        },
+        "review_reason": event["review_reason"],
+        "evidence_grounding": (
+            "The candidate uses consecutive real calibrated observations, and "
+            f"vehicle ID {track_id} {continuity_status}."
+        ),
+        "supporting_clip": event.get("marshal_briefing_clip_path"),
+        "recommended_human_action": event["recommended_human_action"],
+    }
+
+
 def build_marshal_briefing(
     run_summary,
     risk_evidence,
     review_evidence,
     max_highlights=DEFAULT_MAX_MARSHAL_BRIEFING_HIGHLIGHTS,
+    safety_candidate_evidence=None,
 ):
     """Create separate, comparable-within-type review highlights from one run."""
     predicted_risk_highlights = [
@@ -93,6 +123,26 @@ def build_marshal_briefing(
             "closest_normalized_distance",
             max_highlights,
         )
+    ]
+    candidate_records = []
+    if isinstance(safety_candidate_evidence, dict):
+        candidate_records = [
+            *safety_candidate_evidence.get("stationary_vehicle_candidates", []),
+            *safety_candidate_evidence.get("restricted_area_entry_candidates", []),
+            *safety_candidate_evidence.get("stationary_in_active_racing_area_candidates", []),
+            *safety_candidate_evidence.get("against_expected_direction_candidates", []),
+        ]
+    candidate_records = sorted(
+        candidate_records,
+        key=lambda event: (
+            event["anchor_time_seconds"],
+            event["candidate_type"],
+            event["track_id"],
+        ),
+    )[:max_highlights]
+    safety_candidate_highlights = [
+        build_safety_candidate_highlight(event, run_summary)
+        for event in candidate_records
     ]
     provenance = run_summary.get("run_provenance", {})
     return {
@@ -113,10 +163,23 @@ def build_marshal_briefing(
         "summary": {
             "candidate_risk_event_count": len(risk_evidence),
             "observed_proximity_event_count": len(review_evidence),
+            "stationary_vehicle_candidate_count": len(
+                safety_candidate_evidence.get("stationary_vehicle_candidates", [])
+            ) if isinstance(safety_candidate_evidence, dict) else 0,
+            "restricted_area_entry_candidate_count": len(
+                safety_candidate_evidence.get("restricted_area_entry_candidates", [])
+            ) if isinstance(safety_candidate_evidence, dict) else 0,
+            "stationary_in_active_racing_area_candidate_count": len(
+                safety_candidate_evidence.get("stationary_in_active_racing_area_candidates", [])
+            ) if isinstance(safety_candidate_evidence, dict) else 0,
+            "against_expected_direction_candidate_count": len(
+                safety_candidate_evidence.get("against_expected_direction_candidates", [])
+            ) if isinstance(safety_candidate_evidence, dict) else 0,
             "trusted_track_segments": run_summary["trusted_track_segments"],
         },
         "predicted_risk_highlights": predicted_risk_highlights,
         "observed_proximity_highlights": observed_proximity_highlights,
+        "safety_candidate_highlights": safety_candidate_highlights,
     }
 
 

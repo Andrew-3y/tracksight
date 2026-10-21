@@ -45,6 +45,40 @@ class BuildRunSummaryTests(unittest.TestCase):
 
         self.assertEqual(summary["run_provenance"], {"detector_model": "model.pt"})
 
+    def test_summary_keeps_camera_trust_diagnostics_when_available(self):
+        diagnostics = {"method": "test", "frame_outcomes": {"transform_updated": 2}}
+        summary = build_run_summary(
+            trajectories={},
+            track_quality={},
+            risk_evidence=[],
+            review_evidence=[],
+            pipeline_version="test",
+            spatial_analysis_enabled=True,
+            processed_frame_count=2,
+            frames_per_second=25.0,
+            camera_trust_diagnostics=diagnostics,
+        )
+        self.assertEqual(summary["camera_trust_diagnostics"], diagnostics)
+
+    def test_summary_keeps_safety_candidate_counts_when_available(self):
+        summary = build_run_summary(
+            trajectories={},
+            track_quality={},
+            risk_evidence=[],
+            review_evidence=[],
+            pipeline_version="test",
+            spatial_analysis_enabled=True,
+            processed_frame_count=2,
+            frames_per_second=25.0,
+            safety_candidate_counts={
+                "stationary_vehicle": 2,
+                "restricted_area_entry": 1,
+            },
+        )
+
+        self.assertEqual(summary["stationary_vehicle_candidate_count"], 2)
+        self.assertEqual(summary["restricted_area_entry_candidate_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

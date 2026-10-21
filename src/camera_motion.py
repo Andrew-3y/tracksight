@@ -45,6 +45,22 @@ class CameraReferenceTransformer:
         self.previous_gray_frame = None
         self.previous_background_mask = None
         self.current_to_reference = np.eye(3, dtype=np.float64)
+        self.diagnostic_counts = {
+            "reference_frame": 0,
+            "transform_updated": 0,
+            "retained_insufficient_features": 0,
+            "retained_insufficient_inliers": 0,
+            "retained_invalid_transform": 0,
+        }
+        self.last_status = None
+
+    def get_diagnostics(self):
+        """Return aggregate, non-sensitive stabilization outcomes for one run."""
+        return {
+            "method": "sparse_optical_flow_background_features",
+            "minimum_inliers": self.minimum_inliers,
+            "frame_outcomes": dict(self.diagnostic_counts),
+        }
 
     def update(self, frame, vehicle_boxes):
         """Return the current image-to-reference transform for this frame.
@@ -58,6 +74,8 @@ class CameraReferenceTransformer:
         if self.previous_gray_frame is None:
             self.previous_gray_frame = gray_frame
             self.previous_background_mask = background_mask
+            self.last_status = "reference_frame"
+            self.diagnostic_counts[self.last_status] += 1
             return self.current_to_reference.copy()
 
         previous_points = cv2.goodFeaturesToTrack(
@@ -67,36 +85,50 @@ class CameraReferenceTransformer:
             minDistance=8,
             mask=self.previous_background_mask,
         )
-        if previous_points is not None:
+        if previous_points is None:
+            self.last_status = "retained_insufficient_features"
+        else:
             current_points, statuses, _ = cv2.calcOpticalFlowPyrLK(
                 self.previous_gray_frame,
                 gray_frame,
                 previous_points,
                 None,
             )
-            valid = statuses.reshape(-1).astype(bool)
-            previous_points = previous_points[valid]
-            current_points = current_points[valid]
-            if len(previous_points) >= self.minimum_inliers:
-                current_to_previous, inlier_mask = cv2.findHomography(
-                    current_points,
-                    previous_points,
-                    cv2.RANSAC,
-                    3.0,
-                )
-                inlier_count = (
-                    0
-                    if inlier_mask is None
-                    else int(inlier_mask.reshape(-1).sum())
-                )
-                if (
-                    current_to_previous is not None
-                    and inlier_count >= self.minimum_inliers
-                    and np.isfinite(current_to_previous).all()
-                ):
-                    self.current_to_reference = (
-                        self.current_to_reference @ current_to_previous
+            if current_points is None or statuses is None:
+                self.last_status = "retained_insufficient_features"
+            else:
+                valid = statuses.reshape(-1).astype(bool)
+                previous_points = previous_points[valid]
+                current_points = current_points[valid]
+                if len(previous_points) < self.minimum_inliers:
+                    self.last_status = "retained_insufficient_features"
+                else:
+                    current_to_previous, inlier_mask = cv2.findHomography(
+                        current_points,
+                        previous_points,
+                        cv2.RANSAC,
+                        3.0,
                     )
+                    inlier_count = (
+                        0
+                        if inlier_mask is None
+                        else int(inlier_mask.reshape(-1).sum())
+                    )
+                    if (
+                        current_to_previous is not None
+                        and inlier_count >= self.minimum_inliers
+                        and np.isfinite(current_to_previous).all()
+                    ):
+                        self.current_to_reference = (
+                            self.current_to_reference @ current_to_previous
+                        )
+                        self.last_status = "transform_updated"
+                    elif current_to_previous is None or not np.isfinite(current_to_previous).all():
+                        self.last_status = "retained_invalid_transform"
+                    else:
+                        self.last_status = "retained_insufficient_inliers"
+
+        self.diagnostic_counts[self.last_status] += 1
 
         self.previous_gray_frame = gray_frame
         self.previous_background_mask = background_mask

@@ -34,6 +34,9 @@ class CameraReferenceTransformerTests(unittest.TestCase):
 
         self.assertAlmostEqual(projected[0], 100, delta=1.0)
         self.assertAlmostEqual(projected[1], 100, delta=1.0)
+        diagnostics = transformer.get_diagnostics()
+        self.assertEqual(diagnostics["frame_outcomes"]["reference_frame"], 1)
+        self.assertEqual(diagnostics["frame_outcomes"]["transform_updated"], 1)
 
 
 if __name__ == "__main__":

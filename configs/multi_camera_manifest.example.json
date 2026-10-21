@@ -1,0 +1,10 @@
+{
+  "cameras": [
+    {
+      "camera_id": "turn_1_external",
+      "label": "Turn 1 external camera",
+      "video_path": "C:/replace/with/turn_1.mp4",
+      "video_time_offset_seconds": 0.0
+    }
+  ]
+}

@@ -76,6 +76,39 @@ class MarshalBriefingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "At least one"):
             build_marshal_briefing({}, [], [], max_highlights=0)
 
+    def test_includes_a_grounded_safety_candidate_highlight(self):
+        briefing = build_marshal_briefing(
+            run_summary={
+                "processed_frame_count": 100,
+                "frames_per_second": 25.0,
+                "trusted_track_segments": 1,
+                "track_quality": {"7": {"trusted_for_safety_analysis": True}},
+            },
+            risk_evidence=[],
+            review_evidence=[],
+            safety_candidate_evidence={
+                "stationary_vehicle_candidates": [
+                    {
+                        "candidate_type": "stationary_vehicle",
+                        "track_ids": [7],
+                        "track_id": 7,
+                        "anchor_frame": 25,
+                        "anchor_time_seconds": 1.0,
+                        "frame_count": 20,
+                        "maximum_spread_vehicle_widths": 0.4,
+                        "measurement_basis": "projected vehicle widths",
+                        "review_reason": "Vehicle ID 7 remained in one place.",
+                        "recommended_human_action": "Review it.",
+                    }
+                ],
+                "restricted_area_entry_candidates": [],
+            },
+        )
+
+        highlight = briefing["safety_candidate_highlights"][0]
+        self.assertEqual(highlight["evidence_type"], "stationary_vehicle")
+        self.assertIn("passed the saved continuity gate", highlight["evidence_grounding"])
+
     def test_selects_only_the_requested_number_of_closest_events(self):
         events = [
             {"distance": 0.8},
